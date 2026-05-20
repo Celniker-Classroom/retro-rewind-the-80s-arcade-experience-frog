@@ -16,14 +16,53 @@
 			overscroll-behavior: none;
 			font-family: 'Courier New', monospace;
 		}
+
+		body {
+			display: grid;
+			place-items: center;
+			width: 100vw;
+			height: 100vh;
+		}
+
+		main.q5-normal {
+			display: grid;
+			place-items: center;
+			width: 100vw;
+			height: 100vh;
+		}
+
+		.q5Canvas {
+			width: min(96vw, 96vh) !important;
+			height: min(96vw, 96vh) !important;
+		}
+
 	</style>
 </head>
 
 <body>
 
+<script type="importmap">
+{
+  "imports": {
+    "box2d3-wasm": "./node_modules/box2d3-wasm/build/dist/es/deluxe/Box2D.deluxe.mjs"
+  }
+}
+</script>
 <script src="./node_modules/q5/q5.js"></script>
-<script src="./node_modules/q5play/q5play.js"></script>
-<script src="sketch.js"></script>
+<script type="module">
+  import './node_modules/q5play/q5play.js';
+
+  // Load the game after q5play registers its Sprite and Group APIs.
+  const sketch = document.createElement('script');
+  sketch.src = 'sketch.js';
+  sketch.onload = () => {
+    // q5 auto-start may already be finished, so start the global sketch manually.
+    if (!Q5._hasGlobal && (window.setup || window.draw)) {
+      new Q5();
+    }
+  };
+  document.body.appendChild(sketch);
+</script>
 </body>
 
 </html>

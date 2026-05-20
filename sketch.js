@@ -26,6 +26,7 @@ let level = 1;
 let lives = 3;
 let highScore = 0;
 let lastScore = 0;
+let riverCheckDelay = 0;
 
 // Timer for each run (seconds)
 let runDuration = 60; // starts at 60s and shortens with level
@@ -44,9 +45,10 @@ let frog = {
   y: 0
 };
 
-// Replace plain arrays with sprite groups (q5play / p5.play style)
-let cars = []; // Array of car objects
-let logs = []; // Array of log objects
+// q5play sprites and groups used for movement and collision checks
+let frogSprite;
+let cars;
+let logs;
 let spritesData; // Load from sprites.json
 let goals = [
   { col: 1, filled: false },
@@ -80,6 +82,7 @@ function ensureSpritesData() {
 // =====================================================
 function setup() {
   createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+  setupSprites();
   spawnCars();
   spawnLogs();
   if (localStorage.getItem('froggerHighScore')) {
@@ -98,6 +101,39 @@ function setup() {
       hue: random(150, 360)
     });
   }
+}
+
+function setupSprites() {
+  // The frog sprite is invisible because drawFrog() draws the emoji.
+  // q5play still uses this sprite for overlap checks.
+  frogSprite = new Sprite(0, 0, TILE_SIZE * 0.7, TILE_SIZE * 0.7, 'kinematic');
+  frogSprite.visible = false;
+  syncFrogSprite();
+
+  // Cars and logs are q5play groups, so collision checks can use overlapping().
+  cars = new Group();
+  logs = new Group();
+}
+
+function syncFrogSprite() {
+  // Keep the q5play frog collider aligned with the grid-based frog position.
+  if (!frogSprite) return;
+  frogSprite.x = frog.col * TILE_SIZE + TILE_SIZE / 2;
+  frogSprite.y = frog.row * TILE_SIZE + TILE_SIZE / 2;
+}
+
+function rgb(r, g, b) {
+  // q5 4.x is more reliable with CSS color strings than p5-style RGB args.
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function rgba(r, g, b, a) {
+  // Convert q5/p5 alpha values from 0-255 to CSS alpha values from 0-1.
+  return `rgba(${r}, ${g}, ${b}, ${a / 255})`;
+}
+
+function rgbFromArray(colorArray) {
+  return rgb(colorArray[0], colorArray[1], colorArray[2]);
 }
 
 // =====================================================
@@ -122,17 +158,17 @@ function draw() {
 // =====================================================
 function drawTitleScreen() {
   // Retro starfield and grid background
-  background(6, 6, 10);
+  background('rgb(6, 6, 10)');
 
   // Stars
   noStroke();
   for (let s of stars) {
-    fill(220, 220, 255, map(s.sz, 1, 3, 120, 255));
+    fill(rgba(220, 220, 255, map(s.sz, 1, 3, 120, 255)));
     circle(s.x, s.y, s.sz);
   }
 
   // Perspective grid
-  stroke(80, 30, 90);
+  stroke(rgb(80, 30, 90));
   strokeWeight(1);
   for (let i = 0; i < 8; i++) {
     let y = CANVAS_HEIGHT * 0.6 + i * 20;
@@ -147,19 +183,19 @@ function drawTitleScreen() {
   // HIGH SCORE at top center
   textAlign(CENTER, TOP);
   textSize(18);
-  fill(255, 120, 150);
+  fill(rgb(255, 120, 150));
   text('HIGH SCORE', CANVAS_WIDTH / 2, 8);
   textSize(22);
-  fill(255, 255, 255);
+  fill(rgb(255, 255, 255));
   text(nf(highScore, 0), CANVAS_WIDTH / 2, 28);
 
   // Main title: PRESS START
   textAlign(CENTER, CENTER);
   textSize(72);
   // Glow effect
-  fill(255, 120, 60);
+  fill(rgb(255, 120, 60));
   text('PRESS START', CANVAS_WIDTH / 2 + 4, CANVAS_HEIGHT / 2 - 40);
-  fill(255, 200, 80);
+  fill(rgb(255, 200, 80));
   text('PRESS START', CANVAS_WIDTH / 2 - 2, CANVAS_HEIGHT / 2 - 44);
   // Subtext
   textSize(18);
@@ -173,7 +209,7 @@ function drawTitleScreen() {
 
   // Credit on bottom-left
   textAlign(LEFT);
-  fill(220, 70, 120);
+  fill(rgb(220, 70, 120));
   textSize(14);
   text('CREDIT 00', 8, CANVAS_HEIGHT - 24);
 }
@@ -187,8 +223,8 @@ function drawGameplay() {
 
   // Update timer
   timeLeft -= deltaTime / 1000;
-  if (timeLeft <= 0) {
-    // Time's up -> frog drowns / loses a life
+  if (timeLeft <= 0 && frog.alive) {
+    // Time's up -> trigger one death, then let the death timer finish.
     timeLeft = 0;
     killFrog();
   }
@@ -221,24 +257,24 @@ function drawGameplay() {
 // =====================================================
 function drawWorld() {
   // Goal zone (row 0) - dark green
-  fill(20, 80, 20);
+  fill(rgb(20, 80, 20));
   noStroke();
   rect(0, 0, CANVAS_WIDTH, TILE_SIZE);
 
   // River (rows 1-5) - blue
-  fill(20, 60, 130);
+  fill(rgb(20, 60, 130));
   rect(0, TILE_SIZE * 1, CANVAS_WIDTH, TILE_SIZE * 5);
 
   // Safe strip (rows 6-7) - green
-  fill(60, 90, 40);
+  fill(rgb(60, 90, 40));
   rect(0, TILE_SIZE * 6, CANVAS_WIDTH, TILE_SIZE * 2);
 
   // Road (rows 8-12) - dark gray with lane markings
-  fill(60, 60, 70);
+  fill(rgb(60, 60, 70));
   rect(0, TILE_SIZE * 8, CANVAS_WIDTH, TILE_SIZE * 5);
 
   // Road markings - yellow dashed lines
-  stroke(200, 190, 50, 120);
+  stroke(rgba(200, 190, 50, 120));
   strokeWeight(2);
   for (let row = 8; row <= 12; row++) {
     for (let x = 0; x < CANVAS_WIDTH; x += TILE_SIZE * 1.5) {
@@ -249,21 +285,21 @@ function drawWorld() {
   noStroke();
 
   // Start zone (row 13) - green
-  fill(60, 90, 40);
+  fill(rgb(60, 90, 40));
   rect(0, TILE_SIZE * 13, CANVAS_WIDTH, TILE_SIZE);
 
   // Draw lily pads (goals)
   for (let goal of goals) {
     if (goal.filled) {
-      fill(50, 200, 80); // Bright green when occupied
+      fill(rgb(50, 200, 80)); // Bright green when occupied
     } else {
-      fill(40, 110, 40); // Dark green when empty
+      fill(rgb(40, 110, 40)); // Dark green when empty
     }
     ellipse(goal.col * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 2, TILE_SIZE * 0.8, TILE_SIZE * 0.7);
 
     // Highlight on filled lily pads
     if (goal.filled) {
-      fill(100, 255, 100, 200);
+      fill(rgba(100, 255, 100, 200));
       ellipse(goal.col * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 2, TILE_SIZE * 0.3, TILE_SIZE * 0.3);
     }
   }
@@ -273,8 +309,8 @@ function drawWorld() {
 //  SPAWN CARS AND LOGS
 // =====================================================
 function spawnCars() {
-  // Clear previous cars and spawn new ones from JSON data
-  cars = [];
+  // Clear old q5play car sprites before making the new level layout.
+  cars.deleteAll();
 
   if (!ensureSpritesData()) return;
 
@@ -295,21 +331,20 @@ function addCarsToRow(row, count, speed, direction, carColor, size) {
     let x = i * spacing + random(0, spacing * 0.4);
     let y = row * TILE_SIZE + TILE_SIZE / 2;
 
-    cars.push({
-      x: x,
-      y: y,
-      w: w,
-      h: h,
-      vx: speed * direction,
-      row: row,
-      color: carColor
-    });
+    // q5play moves this sprite using vel.x and detects contact with the frog.
+    let car = new cars.Sprite(x, y, w, h, 'kinematic');
+    car.visible = false;
+    car.vel.x = speed * direction;
+    car.row = row;
+    car.w = w;
+    car.h = h;
+    car.carColor = carColor;
   }
 }
 
 function spawnLogs() {
-  // Clear previous logs and spawn new ones from JSON data
-  logs = [];
+  // Clear old q5play log sprites before making the new level layout.
+  logs.deleteAll();
 
   if (!ensureSpritesData()) return;
 
@@ -330,46 +365,52 @@ function addLogsToRow(row, count, speed, direction, lengthInTiles) {
     let x = i * spacing;
     let y = row * TILE_SIZE + TILE_SIZE / 2;
 
-    let s = createSprite(x, y, w, h);
-    sogs.push({
-      x: x,
-      y: y,
-      w: w,
-      h: h,
-      vx: speed * direction,
-      row: row
-    }
+    // q5play moves this sprite using vel.x and detects whether the frog is riding it.
+    let log = new logs.Sprite(x, y, w, h, 'kinematic');
+    log.visible = false;
+    log.vel.x = speed * direction;
+    log.row = row;
+    log.w = w;
+    log.h = h;
+    log.lastX = x;
+    log.deltaX = 0;
+  }
 }
 
 // =====================================================
 //  UPDATE AND DRAW CARS AND LOGS
 // =====================================================
 function updateAndDrawObjects() {
-  // Update and draw logs
+  // Wrap and draw logs. q5play updates their x positions from vel.x.
   for (let i = 0; i < logs.length; i++) {
     let log = logs[i];
-
-    // Update position
-    log.x += log.vx * deltaTime / 1000; // deltaTime in milliseconds
+    let previousX = log.lastX ?? log.x;
 
     // Wrap around horizontally
-    if (log.vx > 0 && log.x - log.w / 2 > CANVAS_WIDTH) {
+    if (log.vel.x > 0 && log.x - log.w / 2 > CANVAS_WIDTH) {
       log.x = -log.w / 2;
     }
-    if (log.vx < 0 && log.x + log.w / 2 < 0) {
+    if (log.vel.x < 0 && log.x + log.w / 2 < 0) {
       log.x = CANVAS_WIDTH + log.w / 2;
     }
+
+    // Save the actual pixel movement so the frog can ride the log.
+    log.deltaX = log.x - previousX;
+    if (abs(log.deltaX) > CANVAS_WIDTH / 2) {
+      log.deltaX = 0;
+    }
+    log.lastX = log.x;
 
     // Draw log as rounded rect
     let lx = log.x - log.w / 2;
     let ly = log.y - log.h / 2 + TILE_SIZE * 0.15;
-    fill(139, 90, 43);
-    stroke(100, 60, 20);
+    fill(rgb(139, 90, 43));
+    stroke(rgb(100, 60, 20));
     strokeWeight(1);
     rect(lx, ly, log.w, log.h, 6);
 
     // Log texture
-    stroke(120, 75, 30, 150);
+    stroke(rgba(120, 75, 30, 150));
     strokeWeight(1);
     for (let t = 1; t < log.w / TILE_SIZE; t++) {
       line(lx + t * TILE_SIZE, ly + 4, lx + t * TILE_SIZE, ly + log.h - 4);
@@ -377,36 +418,33 @@ function updateAndDrawObjects() {
     noStroke();
   }
 
-  // Update and draw cars
+  // Wrap and draw cars. q5play updates their x positions from vel.x.
   for (let i = 0; i < cars.length; i++) {
     let car = cars[i];
 
-    // Update position
-    car.x += car.vx * deltaTime / 1000; // deltaTime in milliseconds
-
     // Wrap around horizontally
-    if (car.vx > 0 && car.x - car.w / 2 > CANVAS_WIDTH) {
+    if (car.vel.x > 0 && car.x - car.w / 2 > CANVAS_WIDTH) {
       car.x = -car.w / 2;
     }
-    if (car.vx < 0 && car.x + car.w / 2 < 0) {
+    if (car.vel.x < 0 && car.x + car.w / 2 < 0) {
       car.x = CANVAS_WIDTH + car.w / 2;
     }
 
     // Draw car body
     let cx = car.x - car.w / 2;
     let cy = car.y - car.h / 2 + TILE_SIZE * 0.125;
-    fill(...car.color);
+    fill(rgbFromArray(car.carColor));
     noStroke();
     rect(cx, cy, car.w, car.h, 5);
 
     // Car windows
-    fill(180, 230, 255, 200);
+    fill(rgba(180, 230, 255, 200));
     rect(cx + car.w * 0.1, cy + car.h * 0.1, car.w * 0.35, car.h * 0.4, 2);
     rect(cx + car.w * 0.55, cy + car.h * 0.1, car.w * 0.35, car.h * 0.4, 2);
 
     // Headlights
-    fill(255, 255, 180);
-    let hlx = car.vx > 0 ? cx + car.w - 4 : cx + 4;
+    fill(rgb(255, 255, 180));
+    let hlx = car.vel.x > 0 ? cx + car.w - 4 : cx + 4;
     circle(hlx, cy + car.h * 0.3, 4);
     circle(hlx, cy + car.h * 0.7, 4);
   }
@@ -416,6 +454,7 @@ function updateAndDrawObjects() {
 //  FROG DRAWING AND ANIMATION
 // =====================================================
 function drawFrog() {
+  syncFrogSprite();
   let x = frog.col * TILE_SIZE + TILE_SIZE / 2;
   let y = frog.row * TILE_SIZE + TILE_SIZE / 2;
   push();
@@ -424,7 +463,7 @@ function drawFrog() {
   textSize(TILE_SIZE * 0.9);
   if (!frog.alive) {
     // Brief death effect: fade the emoji
-    fill(255, 80, 80, map(frog.deathTimer, 60, 0, 255, 0));
+    fill(rgba(255, 80, 80, map(frog.deathTimer, 60, 0, 255, 0)));
   } else {
     fill(255);
   }
@@ -436,64 +475,61 @@ function drawFrog() {
 //  FROG INPUT HANDLING
 // =====================================================
 function handleFrogInput() {
-  // Movement is now handled in keyPressed() function
-  // This function is called every frame to handle riding logs in the river
+  // Movement is now handled in keyPressed() function.
+  // Wait one frame after a jump so q5play can move sprites first.
+  if (riverCheckDelay > 0) {
+    riverCheckDelay--;
+    syncFrogSprite();
+    return;
+  }
 
   // Handle river/log movement
   if (frog.row >= 1 && frog.row <= 5) {
     let onLog = false;
-    let frogPixelX = frog.col * TILE_SIZE;
+    syncFrogSprite();
 
     for (let i = 0; i < logs.length; i++) {
       let log = logs[i];
-      if (log.row === frog.row) {
-        let lx = log.x - log.w / 2;
-        if (frogPixelX + TILE_SIZE > lx && frogPixelX < lx + log.w) {
-          // Frog is on this log - ride with it
-          frog.col += log.vx / TILE_SIZE;
-          onLog = true;
-          break;
-        }
+      if (log.row === frog.row && frogIsOnLog(log)) {
+        // The log is still a q5play sprite; this direct bounds check matches what is drawn.
+        frog.col += log.deltaX / TILE_SIZE;
+        syncFrogSprite();
+        onLog = true;
+        break;
       }
     }
 
     if (!onLog) {
       // Frog fell in the river!
       killFrog();
-    } else if (frog.col < 0 || frog.col >= GRID_COLS) {
+    } else if (frogSprite.x < 0 || frogSprite.x > CANVAS_WIDTH) {
       // Frog rode off the edge
       killFrog();
     }
   }
 }
 
+function frogIsOnLog(log) {
+  // q5play overlap tracking was too strict for this grid jump.
+  // Use the q5play sprite position and size so the playable area matches the visible log.
+  let frogLeft = frogSprite.x - TILE_SIZE * 0.35;
+  let frogRight = frogSprite.x + TILE_SIZE * 0.35;
+  let logLeft = log.x - log.w / 2;
+  let logRight = log.x + log.w / 2;
+
+  return frogRight > logLeft && frogLeft < logRight;
+}
+
 // =====================================================
 //  COLLISION DETECTION
 // =====================================================
 function checkCollisions() {
-  // Car collision - only check in road rows (8-12)
-  if (frog.row >= 8 && frog.row <= 12) {
-    let frogLeft = frog.col * TILE_SIZE + TILE_SIZE * 0.15;
-    let frogRight = frog.col * TILE_SIZE + TILE_SIZE * 0.85;
-    let frogTop = frog.row * TILE_SIZE + TILE_SIZE * 0.15;
-    let frogBottom = frog.row * TILE_SIZE + TILE_SIZE * 0.85;
+  syncFrogSprite();
 
-    for (let i = 0; i < cars.length; i++) {
-      let car = cars[i];
-      if (car.row !== frog.row) continue;
-
-      let carTop = car.y - car.h / 2;
-      let carBottom = carTop + car.h;
-      let carLeft = car.x - car.w / 2;
-      let carRight = carLeft + car.w;
-
-      // Rectangle collision
-      if (frogRight > carLeft && frogLeft < carRight &&
-          frogBottom > carTop && frogTop < carBottom) {
-        killFrog();
-        return;
-      }
-    }
+  // q5play collision check: the frog dies while its sprite overlaps any car sprite.
+  if (frog.row >= 8 && frog.row <= 12 && frogSprite.overlapping(cars)) {
+    killFrog();
+    return;
   }
 
   // Check if frog reached a goal
@@ -533,12 +569,15 @@ function checkCollisions() {
 function killFrog() {
   frog.alive = false;
   frog.deathTimer = 60;
+  syncFrogSprite();
 }
 
 function respawnFrog() {
   frog.col = 7;
   frog.row = 13;
   frog.alive = true;
+  riverCheckDelay = 0;
+  syncFrogSprite();
 }
 
 function resetGame() {
@@ -548,6 +587,8 @@ function resetGame() {
   frog.col = 7;
   frog.row = 13;
   frog.alive = true;
+  riverCheckDelay = 0;
+  syncFrogSprite();
   goals.forEach(g => g.filled = false);
   spawnCars();
   spawnLogs();
@@ -563,6 +604,8 @@ function nextLevel() {
   frog.col = 7;
   frog.row = 13;
   frog.alive = true;
+  riverCheckDelay = 0;
+  syncFrogSprite();
   spawnCars();
   spawnLogs();
   // shorten the timer each level, cap at 30s
@@ -571,34 +614,43 @@ function nextLevel() {
   gameState = GAME_STATE.PLAYING;
 }
 
+function afterFrogMove() {
+  // Give q5play one physics update before checking log overlap after a jump.
+  riverCheckDelay = 1;
+  syncFrogSprite();
+  if (frog.row < 13) {
+    score += 10;
+  }
+}
+
 // =====================================================
 //  HUD - Heads Up Display
 // =====================================================
 function drawHUD() {
-  fill(0, 255, 0); // Green text - retro arcade
+  fill(rgb(0, 255, 0)); // Green text - retro arcade
   textAlign(LEFT);
   textSize(14);
-  text('SCORE: ' + score, 8, CANVAS_HEIGHT - 5);
+  text('SCORE: ' + score, 8, CANVAS_HEIGHT - 16);
 
   // Timer at top center
   textAlign(CENTER, TOP);
   textSize(18);
-  fill(255, 200, 80);
+  fill(rgb(255, 200, 80));
   let displayTime = max(0, Math.ceil(timeLeft));
   text('TIME: ' + nf(displayTime, 2) + 's', CANVAS_WIDTH / 2, 6);
 
   textAlign(RIGHT);
-  text('LIVES: ', CANVAS_WIDTH - 60, CANVAS_HEIGHT - 5);
+  text('LIVES: ', CANVAS_WIDTH - 60, CANVAS_HEIGHT - 16);
 
   // Draw life indicators (small circles)
   for (let i = 0; i < lives; i++) {
-    fill(0, 255, 0);
-    circle(CANVAS_WIDTH - 20 - i * 15, CANVAS_HEIGHT - 8, 8);
+    fill(rgb(0, 255, 0));
+    circle(CANVAS_WIDTH - 20 - i * 15, CANVAS_HEIGHT - 19, 8);
   }
 
   // Level indicator
   textAlign(CENTER);
-  text('LEVEL: ' + level, CANVAS_WIDTH / 2, CANVAS_HEIGHT - 5);
+  text('LEVEL: ' + level, CANVAS_WIDTH / 2, CANVAS_HEIGHT - 16);
 }
 
 // =====================================================
@@ -606,18 +658,18 @@ function drawHUD() {
 // =====================================================
 function drawGameOverScreen() {
   // Dark overlay
-  fill(0, 0, 0, 200);
+  fill(rgba(0, 0, 0, 200));
   rect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
   // Game Over text
-  fill(255, 50, 50); // Red
+  fill(rgb(255, 50, 50)); // Red
   textAlign(CENTER, CENTER);
   textSize(48);
   text('GAME OVER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 60);
 
   // Score display
   textSize(24);
-  fill(0, 255, 0);
+  fill(rgb(0, 255, 0));
   text('FINAL SCORE: ' + score, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
   text('HIGH SCORE: ' + highScore, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 50);
 
@@ -627,7 +679,7 @@ function drawGameOverScreen() {
 
   // Restart instructions
   textSize(16);
-  fill(255, 255, 255);
+  fill(rgb(255, 255, 255));
   text('PRESS SPACE TO RETURN TO TITLE', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 120);
 }
 
@@ -636,23 +688,23 @@ function drawGameOverScreen() {
 // =====================================================
 function drawLevelCompleteScreen() {
   // Dark overlay
-  fill(0, 0, 0, 200);
+  fill(rgba(0, 0, 0, 200));
   rect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
   // Level Complete text
-  fill(0, 255, 0); // Green
+  fill(rgb(0, 255, 0)); // Green
   textAlign(CENTER, CENTER);
   textSize(48);
   text('LEVEL ' + level + ' COMPLETE!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 60);
 
   // Score display
   textSize(20);
-  fill(200, 200, 200);
+  fill(rgb(200, 200, 200));
   text('SCORE: ' + score, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
 
   // Next level instructions
   textSize(16);
-  fill(0, 255, 0);
+  fill(rgb(0, 255, 0));
   text('PRESS SPACE FOR NEXT LEVEL', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 100);
 }
 
@@ -687,6 +739,7 @@ function keyPressed() {
         frog.col--;
         moved = true;
       }
+      if (moved) afterFrogMove();
       return false;
     }
     if (keyCode === RIGHT_ARROW || keyCode === 68) { // RIGHT_ARROW or D
@@ -694,6 +747,7 @@ function keyPressed() {
         frog.col++;
         moved = true;
       }
+      if (moved) afterFrogMove();
       return false;
     }
     if (keyCode === UP_ARROW || keyCode === 87) { // UP_ARROW or W
@@ -701,6 +755,7 @@ function keyPressed() {
         frog.row--;
         moved = true;
       }
+      if (moved) afterFrogMove();
       return false;
     }
     if (keyCode === DOWN_ARROW || keyCode === 83) { // DOWN_ARROW or S
@@ -708,13 +763,8 @@ function keyPressed() {
         frog.row++;
         moved = true;
       }
+      if (moved) afterFrogMove();
       return false;
     }
-
-    // Award points for moving forward
-    if (moved && frog.row < 13) {
-      score += 10;
-    }
   }
-}
 }
