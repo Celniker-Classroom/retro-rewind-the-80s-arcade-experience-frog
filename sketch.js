@@ -21,11 +21,18 @@ const GAME_STATE = {
 
 // Global variables
 let gameState = GAME_STATE.TITLE;
-let bugSpriteSheet; // Bug sprite sheet image
 let score = 0;
 let level = 1;
 let lives = 3;
 let highScore = 0;
+let lastScore = 0;
+
+// Timer for each run (seconds)
+let runDuration = 60; // starts at 60s and shortens with level
+let timeLeft = 60;
+
+// Starfield for title screen
+let stars = [];
 
 // Game objects
 let frog = {
@@ -37,8 +44,10 @@ let frog = {
   y: 0
 };
 
-let cars = [];
-let logs = [];
+// Replace plain arrays with sprite groups (q5play / p5.play style)
+let cars = []; // Array of car objects
+let logs = []; // Array of log objects
+let spritesData; // Load from sprites.json
 let goals = [
   { col: 1, filled: false },
   { col: 4, filled: false },
@@ -48,11 +57,22 @@ let goals = [
 ];
 
 // =====================================================
-//  PRELOAD - Load images before game starts
+//  PRELOAD - Load images and data before game starts
 // =====================================================
 function preload() {
-  // Load bug sprite sheet (160x32, two 80x32 frames side by side)
-  bugSpriteSheet = loadImage('bug_sprite.png');
+  // Load sprite definitions from JSON (synchronously wait for it to load)
+  spritesData = loadJSON('sprites.json');
+  // No external frog sprite; we'll use emoji for the frog player.
+}
+
+// Helper function to ensure data is loaded
+function ensureSpritesData() {
+  if (!spritesData || typeof spritesData.then === 'function') {
+    // If it's a Promise, log a warning
+    console.warn('spritesData is still loading or is null');
+    return false;
+  }
+  return true;
 }
 
 // =====================================================
@@ -64,6 +84,19 @@ function setup() {
   spawnLogs();
   if (localStorage.getItem('froggerHighScore')) {
     highScore = parseInt(localStorage.getItem('froggerHighScore'));
+  }
+  if (localStorage.getItem('froggerLastScore')) {
+    lastScore = parseInt(localStorage.getItem('froggerLastScore'));
+  }
+
+  // Prepare title screen starfield
+  for (let i = 0; i < 120; i++) {
+    stars.push({
+      x: random(0, CANVAS_WIDTH),
+      y: random(0, CANVAS_HEIGHT / 2),
+      sz: random(1, 3),
+      hue: random(150, 360)
+    });
   }
 }
 
@@ -88,29 +121,61 @@ function draw() {
 //  TITLE SCREEN
 // =====================================================
 function drawTitleScreen() {
-  fill(0, 255, 0); // Green - retro arcade style
+  // Retro starfield and grid background
+  background(6, 6, 10);
+
+  // Stars
+  noStroke();
+  for (let s of stars) {
+    fill(220, 220, 255, map(s.sz, 1, 3, 120, 255));
+    circle(s.x, s.y, s.sz);
+  }
+
+  // Perspective grid
+  stroke(80, 30, 90);
+  strokeWeight(1);
+  for (let i = 0; i < 8; i++) {
+    let y = CANVAS_HEIGHT * 0.6 + i * 20;
+    line(0, y, CANVAS_WIDTH, y);
+  }
+  for (let i = 0; i < 16; i++) {
+    let x = i * (CANVAS_WIDTH / 16);
+    let y1 = CANVAS_HEIGHT * 0.6;
+    line(x, y1, CANVAS_WIDTH / 2 + (x - CANVAS_WIDTH / 2) * 4, CANVAS_HEIGHT);
+  }
+
+  // HIGH SCORE at top center
+  textAlign(CENTER, TOP);
+  textSize(18);
+  fill(255, 120, 150);
+  text('HIGH SCORE', CANVAS_WIDTH / 2, 8);
+  textSize(22);
+  fill(255, 255, 255);
+  text(nf(highScore, 0), CANVAS_WIDTH / 2, 28);
+
+  // Main title: PRESS START
   textAlign(CENTER, CENTER);
-  textSize(48);
-  text('FROGGER', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 120);
+  textSize(72);
+  // Glow effect
+  fill(255, 120, 60);
+  text('PRESS START', CANVAS_WIDTH / 2 + 4, CANVAS_HEIGHT / 2 - 40);
+  fill(255, 200, 80);
+  text('PRESS START', CANVAS_WIDTH / 2 - 2, CANVAS_HEIGHT / 2 - 44);
+  // Subtext
+  textSize(18);
+  fill(200);
+  text('INSERT COIN TO CONTINUE', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 30);
 
-  textSize(16);
-  fill(255);
-  text('Help the frog cross the busy road', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 40);
-  text('and navigate the river to reach safety!', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
-
-  textSize(14);
-  fill(200, 200, 200);
-  text('ARROW KEYS to move', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 60);
-  text('Avoid cars and stay on logs', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 90);
-  text('Reach all 5 lily pads to beat the level', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 120);
-
-  textSize(20);
-  fill(0, 255, 0);
-  text('PRESS SPACE TO START', CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 180);
-
+  // Show last run score and credit
   textSize(12);
-  fill(150);
-  text('High Score: ' + highScore, CANVAS_WIDTH / 2, CANVAS_HEIGHT - 20);
+  fill(255);
+  text('LAST SCORE: ' + lastScore, CANVAS_WIDTH / 2, CANVAS_HEIGHT - 40);
+
+  // Credit on bottom-left
+  textAlign(LEFT);
+  fill(220, 70, 120);
+  textSize(14);
+  text('CREDIT 00', 8, CANVAS_HEIGHT - 24);
 }
 
 // =====================================================
@@ -119,6 +184,14 @@ function drawTitleScreen() {
 function drawGameplay() {
   drawWorld();
   updateAndDrawObjects();
+
+  // Update timer
+  timeLeft -= deltaTime / 1000;
+  if (timeLeft <= 0) {
+    // Time's up -> frog drowns / loses a life
+    timeLeft = 0;
+    killFrog();
+  }
 
   if (frog.alive) {
     handleFrogInput();
@@ -200,62 +273,72 @@ function drawWorld() {
 //  SPAWN CARS AND LOGS
 // =====================================================
 function spawnCars() {
+  // Clear previous cars and spawn new ones from JSON data
   cars = [];
+
+  if (!ensureSpritesData()) return;
+
   let speedMultiplier = 1 + (level - 1) * 0.2;
 
-  // Row 8: Red cars going right
-  addCarsToRow(8, 3, 2 * speedMultiplier, 1, color(220, 50, 50), 1.2);
-  // Row 9: Yellow cars going left
-  addCarsToRow(9, 3, 2.2 * speedMultiplier, -1, color(240, 180, 20), 1);
-  // Row 10: Purple trucks going right (longer, slower)
-  addCarsToRow(10, 2, 1.8 * speedMultiplier, 1, color(180, 60, 200), 1.8);
-  // Row 11: Blue cars going left
-  addCarsToRow(11, 4, 2.1 * speedMultiplier, -1, color(50, 150, 220), 0.9);
-  // Row 12: Orange cars going right
-  addCarsToRow(12, 3, 2.3 * speedMultiplier, 1, color(220, 120, 50), 1.1);
+  // Iterate through car configurations from sprites.json
+  for (let carConfig of spritesData.cars) {
+    addCarsToRow(carConfig.row, carConfig.count, carConfig.speed * speedMultiplier, 
+                 carConfig.direction, carConfig.color, carConfig.size);
+  }
 }
 
 function addCarsToRow(row, count, speed, direction, carColor, size) {
   let spacing = CANVAS_WIDTH / count;
   for (let i = 0; i < count; i++) {
+    let w = TILE_SIZE * size;
+    let h = TILE_SIZE * 0.75;
+    let x = i * spacing + random(0, spacing * 0.4);
+    let y = row * TILE_SIZE + TILE_SIZE / 2;
+
     cars.push({
-      x: i * spacing + random(0, spacing * 0.4),
+      x: x,
+      y: y,
+      w: w,
+      h: h,
+      vx: speed * direction,
       row: row,
-      speed: speed * direction,
-      color: carColor,
-      width: TILE_SIZE * size,
-      height: TILE_SIZE * 0.75
+      color: carColor
     });
   }
 }
 
 function spawnLogs() {
+  // Clear previous logs and spawn new ones from JSON data
   logs = [];
+
+  if (!ensureSpritesData()) return;
+
   let speedMultiplier = 1 + (level - 1) * 0.15;
 
-  // Row 1: Medium logs going right
-  addLogsToRow(1, 2, 1.2 * speedMultiplier, 1, 2.5);
-  // Row 2: Long logs going left
-  addLogsToRow(2, 2, 1.5 * speedMultiplier, -1, 3.5);
-  // Row 3: Short logs going right
-  addLogsToRow(3, 3, 0.9 * speedMultiplier, 1, 2);
-  // Row 4: Long logs going left
-  addLogsToRow(4, 2, 1.3 * speedMultiplier, -1, 3);
-  // Row 5: Medium logs going right
-  addLogsToRow(5, 3, 1.1 * speedMultiplier, 1, 2.2);
+  // Iterate through log configurations from sprites.json
+  for (let logConfig of spritesData.logs) {
+    addLogsToRow(logConfig.row, logConfig.count, logConfig.speed * speedMultiplier, 
+                 logConfig.direction, logConfig.lengthInTiles);
+  }
 }
 
 function addLogsToRow(row, count, speed, direction, lengthInTiles) {
   let spacing = CANVAS_WIDTH / count;
   for (let i = 0; i < count; i++) {
-    logs.push({
-      x: i * spacing,
-      row: row,
-      speed: speed * direction,
-      width: TILE_SIZE * lengthInTiles,
-      height: TILE_SIZE * 0.7
-    });
-  }
+    let w = TILE_SIZE * lengthInTiles;
+    let h = TILE_SIZE * 0.7;
+    let x = i * spacing;
+    let y = row * TILE_SIZE + TILE_SIZE / 2;
+
+    let s = createSprite(x, y, w, h);
+    sogs.push({
+      x: x,
+      y: y,
+      w: w,
+      h: h,
+      vx: speed * direction,
+      row: row
+    }
 }
 
 // =====================================================
@@ -263,61 +346,69 @@ function addLogsToRow(row, count, speed, direction, lengthInTiles) {
 // =====================================================
 function updateAndDrawObjects() {
   // Update and draw logs
-  for (let log of logs) {
-    log.x += log.speed;
+  for (let i = 0; i < logs.length; i++) {
+    let log = logs[i];
 
-    // Wrap around screen
-    if (log.speed > 0 && log.x > CANVAS_WIDTH) {
-      log.x = -log.width;
+    // Update position
+    log.x += log.vx * deltaTime / 1000; // deltaTime in milliseconds
+
+    // Wrap around horizontally
+    if (log.vx > 0 && log.x - log.w / 2 > CANVAS_WIDTH) {
+      log.x = -log.w / 2;
     }
-    if (log.speed < 0 && log.x + log.width < 0) {
-      log.x = CANVAS_WIDTH;
+    if (log.vx < 0 && log.x + log.w / 2 < 0) {
+      log.x = CANVAS_WIDTH + log.w / 2;
     }
 
-    // Draw log
-    let y = log.row * TILE_SIZE + TILE_SIZE * 0.15;
+    // Draw log as rounded rect
+    let lx = log.x - log.w / 2;
+    let ly = log.y - log.h / 2 + TILE_SIZE * 0.15;
     fill(139, 90, 43);
     stroke(100, 60, 20);
     strokeWeight(1);
-    rect(log.x, y, log.width, log.height, 6);
+    rect(lx, ly, log.w, log.h, 6);
 
-    // Log texture lines
+    // Log texture
     stroke(120, 75, 30, 150);
     strokeWeight(1);
-    for (let i = 1; i < log.width / TILE_SIZE; i++) {
-      line(log.x + i * TILE_SIZE, y + 4, log.x + i * TILE_SIZE, y + log.height - 4);
+    for (let t = 1; t < log.w / TILE_SIZE; t++) {
+      line(lx + t * TILE_SIZE, ly + 4, lx + t * TILE_SIZE, ly + log.h - 4);
     }
     noStroke();
   }
 
   // Update and draw cars
-  for (let car of cars) {
-    car.x += car.speed;
+  for (let i = 0; i < cars.length; i++) {
+    let car = cars[i];
 
-    // Wrap around screen
-    if (car.speed > 0 && car.x > CANVAS_WIDTH) {
-      car.x = -car.width;
+    // Update position
+    car.x += car.vx * deltaTime / 1000; // deltaTime in milliseconds
+
+    // Wrap around horizontally
+    if (car.vx > 0 && car.x - car.w / 2 > CANVAS_WIDTH) {
+      car.x = -car.w / 2;
     }
-    if (car.speed < 0 && car.x + car.width < 0) {
-      car.x = CANVAS_WIDTH;
+    if (car.vx < 0 && car.x + car.w / 2 < 0) {
+      car.x = CANVAS_WIDTH + car.w / 2;
     }
 
     // Draw car body
-    let y = car.row * TILE_SIZE + TILE_SIZE * 0.125;
-    fill(car.color);
+    let cx = car.x - car.w / 2;
+    let cy = car.y - car.h / 2 + TILE_SIZE * 0.125;
+    fill(...car.color);
     noStroke();
-    rect(car.x, y, car.width, car.height, 5);
+    rect(cx, cy, car.w, car.h, 5);
 
     // Car windows
     fill(180, 230, 255, 200);
-    rect(car.x + car.width * 0.1, y + car.height * 0.1, car.width * 0.35, car.height * 0.4, 2);
-    rect(car.x + car.width * 0.55, y + car.height * 0.1, car.width * 0.35, car.height * 0.4, 2);
+    rect(cx + car.w * 0.1, cy + car.h * 0.1, car.w * 0.35, car.h * 0.4, 2);
+    rect(cx + car.w * 0.55, cy + car.h * 0.1, car.w * 0.35, car.h * 0.4, 2);
 
     // Headlights
     fill(255, 255, 180);
-    let hlx = car.speed > 0 ? car.x + car.width - 4 : car.x + 4;
-    circle(hlx, y + car.height * 0.3, 4);
-    circle(hlx, y + car.height * 0.7, 4);
+    let hlx = car.vx > 0 ? cx + car.w - 4 : cx + 4;
+    circle(hlx, cy + car.h * 0.3, 4);
+    circle(hlx, cy + car.h * 0.7, 4);
   }
 }
 
@@ -327,34 +418,17 @@ function updateAndDrawObjects() {
 function drawFrog() {
   let x = frog.col * TILE_SIZE + TILE_SIZE / 2;
   let y = frog.row * TILE_SIZE + TILE_SIZE / 2;
-
-  // Calculate which frame to show (alternate every 8 frames)
-  let frameNum = Math.floor(frameCount / 8) % 2;
-  
   push();
-  translate(x, y);
-  
+  translate(x, y + 4);
+  textAlign(CENTER, CENTER);
+  textSize(TILE_SIZE * 0.9);
   if (!frog.alive) {
-    // Death animation: spin and fade
-    rotate(frameCount * 0.25);
-    tint(255, 80, 80, map(frog.deathTimer, 60, 0, 255, 0)); // Red + fade
-  }
-  
-  // Draw the frog sprite if it loaded, otherwise draw a placeholder
-  if (bugSpriteSheet && bugSpriteSheet.width > 0) {
-    imageMode(CENTER);
-    // Use source region from sprite sheet
-    let sx = frameNum * 80;
-    let sy = 0;
-    image(bugSpriteSheet, 0, 0, 80, 32, sx, sy, 80, 32);
+    // Brief death effect: fade the emoji
+    fill(255, 80, 80, map(frog.deathTimer, 60, 0, 255, 0));
   } else {
-    // Fallback: draw green circle if sprite didn't load
-    fill(0, 200, 0);
-    noStroke();
-    circle(0, 0, 30);
+    fill(255);
   }
-  
-  noTint();
+  text('🐸', 0, 0);
   pop();
 }
 
@@ -370,11 +444,13 @@ function handleFrogInput() {
     let onLog = false;
     let frogPixelX = frog.col * TILE_SIZE;
 
-    for (let log of logs) {
+    for (let i = 0; i < logs.length; i++) {
+      let log = logs[i];
       if (log.row === frog.row) {
-        if (frogPixelX + TILE_SIZE > log.x && frogPixelX < log.x + log.width) {
+        let lx = log.x - log.w / 2;
+        if (frogPixelX + TILE_SIZE > lx && frogPixelX < lx + log.w) {
           // Frog is on this log - ride with it
-          frog.col += log.speed / TILE_SIZE;
+          frog.col += log.vx / TILE_SIZE;
           onLog = true;
           break;
         }
@@ -402,14 +478,17 @@ function checkCollisions() {
     let frogTop = frog.row * TILE_SIZE + TILE_SIZE * 0.15;
     let frogBottom = frog.row * TILE_SIZE + TILE_SIZE * 0.85;
 
-    for (let car of cars) {
+    for (let i = 0; i < cars.length; i++) {
+      let car = cars[i];
       if (car.row !== frog.row) continue;
 
-      let carTop = car.row * TILE_SIZE + TILE_SIZE * 0.125;
-      let carBottom = carTop + car.height;
+      let carTop = car.y - car.h / 2;
+      let carBottom = carTop + car.h;
+      let carLeft = car.x - car.w / 2;
+      let carRight = carLeft + car.w;
 
       // Rectangle collision
-      if (frogRight > car.x && frogLeft < car.x + car.width &&
+      if (frogRight > carLeft && frogLeft < carRight &&
           frogBottom > carTop && frogTop < carBottom) {
         killFrog();
         return;
@@ -472,6 +551,9 @@ function resetGame() {
   goals.forEach(g => g.filled = false);
   spawnCars();
   spawnLogs();
+  // Set timer for this run depending on level
+  runDuration = max(60 - (level - 1) * 5, 30);
+  timeLeft = runDuration;
   gameState = GAME_STATE.PLAYING;
 }
 
@@ -483,6 +565,9 @@ function nextLevel() {
   frog.alive = true;
   spawnCars();
   spawnLogs();
+  // shorten the timer each level, cap at 30s
+  runDuration = max(60 - (level - 1) * 5, 30);
+  timeLeft = runDuration;
   gameState = GAME_STATE.PLAYING;
 }
 
@@ -494,6 +579,13 @@ function drawHUD() {
   textAlign(LEFT);
   textSize(14);
   text('SCORE: ' + score, 8, CANVAS_HEIGHT - 5);
+
+  // Timer at top center
+  textAlign(CENTER, TOP);
+  textSize(18);
+  fill(255, 200, 80);
+  let displayTime = max(0, Math.ceil(timeLeft));
+  text('TIME: ' + nf(displayTime, 2) + 's', CANVAS_WIDTH / 2, 6);
 
   textAlign(RIGHT);
   text('LIVES: ', CANVAS_WIDTH - 60, CANVAS_HEIGHT - 5);
@@ -528,6 +620,10 @@ function drawGameOverScreen() {
   fill(0, 255, 0);
   text('FINAL SCORE: ' + score, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
   text('HIGH SCORE: ' + highScore, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 50);
+
+  // Save last score persistently
+  lastScore = score;
+  localStorage.setItem('froggerLastScore', lastScore);
 
   // Restart instructions
   textSize(16);
@@ -620,4 +716,5 @@ function keyPressed() {
       score += 10;
     }
   }
+}
 }
